@@ -7,7 +7,7 @@ output:
 
 <style type="text/css">
 body {
-  max-width: 130em !important;
+  max-width: 90em !important;
 }
 </style>
 
@@ -38,8 +38,6 @@ options(table_counter = TRUE)
 # Then install the Grmd-package by running below code:
 #devtools::install_github("gforge/Grmd")
 
-#devtools::install_github("kassambara/easyGgplot2")
-library(easyGgplot2)
 
 # function to install missing packages
 ipak <- function(pkg){
@@ -51,17 +49,35 @@ ipak <- function(pkg){
 
 #install.packages('package_name', dependencies=TRUE, repos='http://cran.rstudio.com/')
 
-packages =c( "dplyr",  "readxl","Hmisc","Gmisc", "magrittr", "flextable", "MASS", "tidyverse", "caret", "knitr", "kableExtra","xtable", "stargazer", "ggpubr", "haven")
+packages =c( "dplyr",  "readxl","Hmisc","Gmisc", "magrittr", "flextable", "MASS", "tidyverse", "caret", "knitr", "kableExtra","xtable", "stargazer", "ggpubr", "haven", "PerformanceAnalytics", "naniar", "gridExtra", "ggthemes", "TSstudio")
 
 ipak(packages)
 
+# packages not pubished
+#devtools::install_github("kassambara/easyGgplot2")
+library(easyGgplot2)
+
+# packages not pubished
+#devtools::install_github('cttobin/ggthemr')
+#library(ggthemr)
+
 
 select = dplyr::select; summarize = dplyr::summarize; rename = dplyr::rename; mutate = dplyr::mutate;
+
+#ggthemr("flat")
 
 #source("unbalanced_functions.R")
 source("table1_utils.R")
 ```
 
+# Explaratory Data Analysis
+
+The goal of the exploratory analysis is to identify the key predictors, generate insights and dicover trends and patters. Throughout this process we are mainly interested in detecting:
+
+* Correlation and assoicitations
+* Trends in time e.g viral load
+* Outliers
+* Any other key information that might be useful in ML modeling
 
 
 ```{r warning=FALSE}
@@ -187,6 +203,10 @@ patient.long = haven::read_sas("ak_vlmonitorl.sas7bdat") %>%
                     vl_count2 = dplyr::nth(na.omit(viralload),2),
                     vl_count3 = dplyr::nth(na.omit(viralload),3),
                     
+                    vl_failure1 = factor(ifelse(vl_count1<=1000, "No","Yes")),
+                    vl_failure2 = factor(ifelse(vl_count2<=1000, "No","Yes")),
+                    vl_failure3 = factor(ifelse(vl_count3<=1000, "No","Yes")),
+                    
                     # num encunters to vl
                     num_encs_to_vl1 = dplyr::nth(na.omit(ifelse(is.na(viralload), NA , visit_num-1)),1),
                     num_encs_to_vl2 = dplyr::nth(na.omit(ifelse(is.na(viralload), NA , visit_num-1)),2),
@@ -219,10 +239,12 @@ patient.cross = haven::read_sas("ak_vlmonitord.sas7bdat")%>%
                     )
 
 #merge master dataset
-dataset=patient.cross %>%  left_join(select(patient.long,
-                              num_days_to_vl1,num_days_to_vl2,num_days_to_vl3,
+dataset=patient.cross %>%  left_join(select(filter(patient.long, visit_num == 1),
+                              num_days_to_vl1,num_days_to_vl2,num_days_to_vl3,vl_failure1,
+                              vl_failure2,vl_failure3,
                               days_from_vl1_vl2,days_from_vl2_vl3,
-                              vl_count1,vl_count2,vl_count3,ptidno,
+                              vl_count1,vl_count2,vl_count3,ptidno,vl1_date,vl2_date,
+                              vl3_date,
                               num_encs_to_vl1,num_encs_to_vl2,num_encs_to_vl3
   
                             ),  c("ptidno"="ptidno"))
@@ -245,41 +267,563 @@ varList= list(
 #dataset= relevelBy(varList,dataset) 
 
 
+patient.long.cross = patient.long %>%  left_join(patient.cross, c("ptidno"="ptidno"))
 #str(dataset)
 ```
 
 
-* We have assumed if is.na(transfer) then No else Yes
-* Unrecorded data (occuring at the 1st encounter) on Hight, Weight, BMI, NHIF have be replaced with non-null next encounter recorded < 3 months from the first encounter
-* Viral Load index detection - It is not possible to know when the next VL is drawn longitudinaly, as shown in the table below. As such we are treating each VL result as individual tests ordered independently.
 
-```{r warning=F, eval=F}
+
+* AMPATH civil status is collected longitudinal; as such missing data on the crossectional dataset has to be replaced with longitudinal civil status recorded not > 3 months after the first encounter
+* We have assumed if is.na(transfer) then No else Yes
+* Unrecorded data (occurring at the 1st encounter) on Height, Weight, BMI, NHIF have to be replaced with non-null next encounter recorded < 3 months from the first encounter
+* Viral Load index  - It is not possible to know when the next VL is drawn longitudinally, as shown in the table below. As such, we are treating each VL result as individual tests ordered independently.
+
+```{r warning=F, eval=T}
 patient.long %>% select(ptidno,visit_num,apptdate,VLundetectable,viralload,viralloadc,Height)%>%  
    filter(ptidno==52764) %>% arrange(ptidno, `apptdate`)  %>% kable () %>% 
   kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
 ```
+# Viral Load Counts
+
+We will start by looking at the overall distribution of VL
+
+## Distribution
 
 
-## Socio-demographics | Program
+```{r fig.align='center',warning=FALSE, cache=F}
+hiv_dfl=dataset%>%filter(!is.na(vl_count1))
+
+
+a =hiv_dfl%>% mutate(VL_Failure=ifelse(vl_count1<=1000, "No","Yes")) %>%
+  ggboxplot( palette = "jco",  ylab = "VL Count",
+          y = c("vl_count1"),  
+          x = c("VL_Failure"), 
+          shape = "VL_Failure",	
+          yscale = c("log2"),
+          add = "jitter", 
+          color = "VL_Failure",  add.params = list(size = 0.2, alpha=0.3, jitter = 0.2) )+
+  scale_color_manual(values= c("#00AFBB", "#E7B800"))+ scale_fill_manual(values= c("#00AFBB", "#E7B800"))
+
+
+b =hiv_dfl%>% mutate(VL_Failure=ifelse(vl_count2<=1000, "No","Yes")) %>%
+  ggboxplot( palette = "jco",  ylab = "VL Count 2",
+          y = c("vl_count2"),  
+          x = c("VL_Failure"), 
+          shape = "VL_Failure",	
+          yscale = c("log2"),
+          add = "jitter", 
+          color = "VL_Failure",  add.params = list(size = 0.2, alpha=0.3, jitter = 0.2) )	+
+scale_color_manual(values= c("#00AFBB", "#E7B800"))+ scale_fill_manual(values= c("#00AFBB", "#E7B800"))
+
+
+c = hiv_dfl%>% mutate(VL_Failure=ifelse(vl_count1<=1000, "No","Yes"))  %>%
+  ggplot2.histogram( xName="vl_count1", backgroundColor="white",  bins=80,
+                         brewerPalette="Paired",
+                         groupName="VL_Failure", xScale="log2",rug = TRUE ,    
+                         alpha=0.5, addDensity=TRUE,  removePanelGrid=TRUE ,removePanelBorder=TRUE,
+                         addMeanLine=TRUE, meanLineSize=1) + xlab("VL Count 1")+
+  scale_color_manual(values= c("#00AFBB", "#E7B800")) + scale_fill_manual(values= c("#00AFBB", "#E7B800"))
+
+d = hiv_dfl%>% mutate(VL_Failure=ifelse(vl_count2<=1000, "No","Yes"))  %>%
+  ggplot2.histogram( xName="vl_count2", backgroundColor="white",  bins=80,
+                         brewerPalette="Paired",
+                         groupName="VL_Failure", xScale="log2", xlab = "VL Count 2",rug = TRUE ,
+                         alpha=0.5, addDensity=TRUE,  removePanelGrid=TRUE ,removePanelBorder=TRUE,
+                         addMeanLine=TRUE, meanLineSize=1) + xlab("VL Count 2")+
+  scale_color_manual(values= c("#00AFBB", "#E7B800"))+ scale_fill_manual(values= c("#00AFBB", "#E7B800"))
+
+ggarrange(a,b,c,d,
+             common.legend = TRUE, legend="bottom",	
+             ncol = 2, nrow=2)	
+
+```
+
+Is a cutoff of 1000 valid with relation to VL detectability limit? To understll start by decomposing the viral load counts into its three components that is inline with the goal of our analyis- Viral load 1, viral load 2 and viral load 3.
+
+
+## Overall Viral Load Counts Detection Limit
+
+```{r fig.align='center',warning=FALSE, cache=F}
+
+patient.long.cross %>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 500 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+## MBARARA Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE, cache=F}
+
+ patient.long.cross %>%
+  filter(program=="MBARARA")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 600 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+```
+
+## MASAKA Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+patient.long.cross %>%
+  filter(program=="MASAKA")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 70 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+## RAKAI Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+
+a = patient.long.cross %>%
+  filter(program=="RAKAI")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 1200 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+b = patient.long.cross %>%
+  filter(program=="RAKAI")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 80 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+ggarrange(a,b,
+             common.legend = TRUE, 
+             ncol = 2, nrow=1)	
+
+```
+
+## IDI Viral Load  Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+patient.long.cross %>%
+  filter(program=="IDI")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 100 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+```
+
+
+## AMPATH Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+
+a = patient.long.cross %>%
+  filter(program=="AMPATH")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 20 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+b = patient.long.cross %>%
+  filter(program=="AMPATH")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 50 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+ggarrange(a,b,
+             common.legend = TRUE, 
+             ncol = 2, nrow=1)	
+
+```
+
+
+
+## FACES Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+patient.long.cross %>%
+  filter(program=="FACES")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 70 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+
+
+
+## KISESA Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+patient.long.cross %>%
+  filter(program=="KISESA")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 60 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+## MOROGORO Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+patient.long.cross %>%
+  filter(program=="MOROGORO")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 60 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+## TUMBI Viral Load Detection Limit
+
+```{r fig.align='center',warning=FALSE,cache=F}
+
+patient.long.cross %>%
+  filter(program=="TUMBI")%>%
+  filter(!is.na(viralload))%>%
+  mutate(year = as.numeric(format(apptdate,'%Y')), onARV=factor(ifelse(onARV==1, "Yes", "No")))%>% 
+  filter(!is.na(viralload))%>%
+  filter( viralload <= 60 ) %>% 
+    ggplot(aes(x=apptdate, y=viralload)) + 
+    geom_jitter(alpha=0.3, aes(color=onARV)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+```
+
+
+We also need to look if this is consisten with VL index
+
+## Viral Load 1 Detection Limit
+
+```{r fig.align='center',warning=FALSE, cache=F}
+
+dataset %>%
+  mutate(year = as.numeric(format(vl1_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl1_date, "Yes", "No")))%>% 
+  filter(!is.na(vl_count1))%>%
+  filter( vl_count1 <= 500 ) %>% 
+    ggplot(aes(x=vl1_date, y=vl_count1)) + 
+    geom_jitter(alpha=0.3, aes(color=on_ART)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+## Viral Load 2 Detection Limit
+
+```{r fig.align='center',warning=FALSE, cache=F}
+
+dataset %>%
+  mutate(year = as.numeric(format(vl2_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl2_date, "Yes", "No")))%>% 
+  filter(!is.na(vl_count2))%>%
+  filter( vl_count2 <= 500 ) %>% 
+    ggplot(aes(x=vl2_date, y=vl_count2)) + 
+    geom_jitter(alpha=0.3, aes(color=on_ART)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+
+## Viral Load 3 Detection Limit
+
+```{r fig.align='center',warning=FALSE, cache=F}
+
+dataset %>%
+  mutate(year = as.numeric(format(vl3_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl3_date, "Yes", "No")))%>% 
+  filter(!is.na(vl_count3))%>%
+  filter( vl_count3 <= 500 ) %>% 
+    ggplot(aes(x=vl3_date, y=vl_count3)) + 
+    geom_jitter(alpha=0.3, aes(color=on_ART)) +
+    geom_smooth() +
+    facet_wrap( ~ program, scales = "free_x")+
+      theme_clean()
+
+
+```
+
+
+
+
+
+
+# Missing Data
+
+## Socio-demographics Missing Data Summary
+
+```{r fig.align='center',warning=FALSE}
+x=c('male','Death','civilstatusENROL', 'transfer','Height','Weight', 'entrypoint', 'nhif', 'bmi','program', 'ageatarvstart' )
+y=c('vl_count1','vl_count2','vl_count3')
+kable( dataset%>%select(c(x,y)) %>%naniar::miss_var_summary()%>%top_n(20,n_miss))
+
+naniar::gg_miss_var(dataset%>%select(c(x,y))  )+ labs(title = "Frequency of Missingness")
+naniar::gg_miss_fct(x = dataset%>%select(c(x,y, "program")), fct = program)
+
+p1 = naniar::gg_miss_fct(x = dataset%>%select(c(x,y, "vl_failure1")), fct = vl_failure1)
+
+p2 =naniar::gg_miss_fct(x = dataset%>%select(c(x,y, "vl_failure2")), fct = vl_failure2)
+
+p3 =naniar::gg_miss_fct(x = dataset%>%select(c(x,y, "vl_failure3")), fct = vl_failure3)
+p4 =naniar::gg_miss_fct(x = dataset%>%select(c(x,y, "Death")), fct = Death)
+
+
+
+gridExtra::grid.arrange(p1,p2,p3,
+             p4 ,
+             ncol = 2, nrow=2)
+```
+
+
+
+
+# Bivariate Analysis
+
+To understand the relationship of each variable with the outcome variable:
+
+
+
+
+## Overall Socio-demographics Correlation
+
+```{r fig.align='center',warning=FALSE}
+PerformanceAnalytics::chart.Correlation(dataset%>%
+                                          mutate(
+                                            male=ifelse(male=="Yes", 1,0),
+                                            Death=ifelse(Death=="Yes", 1,0),
+                                            transfer=ifelse(transfer=="Yes", 1,0),
+                                            married=ifelse(civilstatusENROL=="Legally Married", 1,0)
+                                          )%>%
+                                          select(Weight,bmi,Height,male,Death,married,"ageatarvstart", vl_count2, vl_count1), histogram=TRUE, pch=22)	
+
+
+
+```
+
+## Socio-demographics | Viral Load Failure 1
 ```{r fig.align='center',warning=FALSE}
 na.rm.var=F;stats=T
 
 # Getting descriptive statistics 
 mergeDesc(
-  "male gender" = getTable1Stats("male","program",desc_both,statistics=stats,na.rm=na.rm.var),       
-  "death" = getTable1Stats("Death","program",desc_both,statistics=stats,na.rm=na.rm.var),   
-  "civil status at enrollment" = getTable1Stats("civilstatusENROL","program",desc_both,statistics=stats,na.rm=na.rm.var), 
-  "patient transferred out" = getTable1Stats("transfer","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "Height (cm) at enrollment" = getTable1Stats("Height","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "Weight (kg) at enrollment" = getTable1Stats("Weight","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "BMI at enrollment" = getTable1Stats("bmi","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "entry point to care" = getTable1Stats("entrypoint","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  
+  "age at first exposure to ARV" = getTable1Stats("ageatarvstart","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),  
+  "male gender" = getTable1Stats("male","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "death" = getTable1Stats("Death","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "civil status at enrollment" = getTable1Stats("civilstatusENROL","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "patient transferred out" = getTable1Stats("transfer","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Height (cm) at enrollment" = getTable1Stats("Height","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Weight (kg) at enrollment" = getTable1Stats("Weight","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "BMI at enrollment" = getTable1Stats("bmi","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+   #"First VL count" = getTable1Stats("vl_count1","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Second VL count" = getTable1Stats("vl_count2","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Third VL count" = getTable1Stats("vl_count3","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"entry point to care" = getTable1Stats("entrypoint","program",desc_both,statistics=stats,na.rm=na.rm.var)
   #"NHIF at enrollment" = getTable1Stats("nhif","program",desc_both,statistics=stats,na.rm=na.rm.var)
           
           )%>%
    htmlTable( caption  = "<b> Socio-demographics </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
-              n.cgroup = c(1,9,1 ), cgroup = c('', 'Programs', '') ,tfoot="<sup>&Dagger;</sup>"
+              n.cgroup = c(1,2,1 ), cgroup = c('', 'First Virologic Failure', '') ,tfoot="<sup>&Dagger;</sup>"
               )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
+
+
+```{r fig.align='center',warning=FALSE}
+
+naniar::gg_miss_upset(dataset%>%select(x, 'vl_failure1'), nsets = 5,nintersects = NA)
+
+
+
+```
+
+## Socio-demographics | Viral Load Failure 2
+```{r fig.align='center',warning=FALSE}
+na.rm.var=F;stats=T
+
+# Getting descriptive statistics 
+mergeDesc(
+  "age at first exposure to ARV" = getTable1Stats("ageatarvstart","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),
+  "male gender" = getTable1Stats("male","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "death" = getTable1Stats("Death","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "civil status at enrollment" = getTable1Stats("civilstatusENROL","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "patient transferred out" = getTable1Stats("transfer","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Height (cm) at enrollment" = getTable1Stats("Height","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Weight (kg) at enrollment" = getTable1Stats("Weight","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),
+  "BMI at enrollment" = getTable1Stats("bmi","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),
+   "First VL count" = getTable1Stats("vl_count1","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var),
+  #"Second VL count" = getTable1Stats("vl_count2","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Third VL count" = getTable1Stats("vl_count3","vl_failure2",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"entry point to care" = getTable1Stats("entrypoint","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"NHIF at enrollment" = getTable1Stats("nhif","program",desc_both,statistics=stats,na.rm=na.rm.var)
+          
+          )%>%
+   htmlTable( caption  = "<b> Socio-demographics </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,2,1 ), cgroup = c('', 'Second Virologic Failure', '') ,tfoot="<sup>&Dagger;</sup>"
+              )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
+
+
+
+
+```{r fig.align='center',warning=FALSE}
+
+naniar::gg_miss_upset(dataset%>%select(x, 'vl_failure2'), nsets = 5,nintersects = NA)
+
+```
+
+## Socio-demographics | Viral Load Failure 3
+```{r fig.align='center',warning=FALSE}
+na.rm.var=F;stats=T
+
+# Getting descriptive statistics 
+mergeDesc(
+  "age at first exposure to ARV" = getTable1Stats("ageatarvstart","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),
+  "male gender" = getTable1Stats("male","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "death" = getTable1Stats("Death","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "civil status at enrollment" = getTable1Stats("civilstatusENROL","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "patient transferred out" = getTable1Stats("transfer","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Height (cm) at enrollment" = getTable1Stats("Height","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Weight (kg) at enrollment" = getTable1Stats("Weight","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),
+  "BMI at enrollment" = getTable1Stats("bmi","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),
+  "First VL count" = getTable1Stats("vl_count1","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Second VL count" = getTable1Stats("vl_count2","vl_failure3",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"Third VL count" = getTable1Stats("vl_count3","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"entry point to care" = getTable1Stats("entrypoint","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"NHIF at enrollment" = getTable1Stats("nhif","program",desc_both,statistics=stats,na.rm=na.rm.var)
+          
+          )%>%
+   htmlTable( caption  = "<b> Socio-demographics </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,2,1 ), cgroup = c('', 'Third Virologic Failure', '') ,tfoot="<sup>&Dagger;</sup>"
+              )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
+
+
+
+
+```{r fig.align='center',warning=FALSE}
+
+naniar::gg_miss_upset(dataset%>%select(x, 'vl_failure3'), nsets = 5,nintersects = NA)
+
+```
+
+## Socio-demographics | Program
+```{r fig.align='center',warning=FALSE}
+na.rm.var=F;stats=F
+
+# Getting descriptive statistics 
+mergeDesc(
+  "age at first exposure to ARV" = getTable1Stats("ageatarvstart","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "male gender" = getTable1Stats("male","program",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "death" = getTable1Stats("Death","program",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "civil status at enrollment" = getTable1Stats("civilstatusENROL","program",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "patient transferred out" = getTable1Stats("transfer","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  #"Height (cm) at enrollment" = getTable1Stats("'Height","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Weight (kg) at enrollment" = getTable1Stats("Weight","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "BMI at enrollment" = getTable1Stats("bmi","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"entry point to care" = getTable1Stats("entrypoint","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"NHIF at enrollment" = getTable1Stats("nhif","program",desc_both,statistics=stats,na.rm=na.rm.var)
+          
+          )%>%
+   htmlTable( caption  = "<b> Socio-demographics </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,9 ), cgroup = c('', 'Programs') ,tfoot="<sup>&Dagger;</sup>"
+              )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
+
+
+
+```{r fig.align='center',warning=FALSE}
+
+naniar::gg_miss_upset(dataset%>%select(x, 'program'), nsets = 5,nintersects = NA)
 
 
 
@@ -287,28 +831,189 @@ mergeDesc(
 
 ## Viral Load Count | Programs
 ```{r fig.align='center',warning=FALSE}
-na.rm.var=F;stats=T
+na.rm.var=F;stats=F
 
 # Getting descriptive statistics 
 mergeDesc(
-  "num_days_to_vl1" = getTable1Stats("num_days_to_vl1","program",desc_both,statistics=stats,na.rm=na.rm.var),       
-  "num_days_to_vl2" = getTable1Stats("num_days_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),   
-  "num_days_to_vl3" = getTable1Stats("num_days_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var), 
-  "days_from_vl1_vl2" = getTable1Stats("days_from_vl1_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "days_from_vl2_vl3" = getTable1Stats("days_from_vl2_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "vl_count1" = getTable1Stats("vl_count1","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "vl_count2" = getTable1Stats("vl_count2","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "vl_count3" = getTable1Stats("vl_count3","program",desc_both,statistics=stats,na.rm=na.rm.var),
-   "num_encs_to_vl1" = getTable1Stats("vl_count1","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "num_encs_to_vl2" = getTable1Stats("num_encs_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "num_encs_to_vl3" = getTable1Stats("num_encs_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  
+  "First VL count" = getTable1Stats("vl_count1","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Second VL count" = getTable1Stats("vl_count2","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Third VL count" = getTable1Stats("vl_count3","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Days (from enrollment) to first VL" = getTable1Stats("num_days_to_vl1","program",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "Days (from enrollment) to second VL" = getTable1Stats("num_days_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "Days (from enrollment) to third VL" = getTable1Stats("num_days_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "Days (from 1st VL) to second VL" = getTable1Stats("days_from_vl1_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Days (from 2nd VL) to thrid VL" = getTable1Stats("days_from_vl2_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var),
+   "# of encounter B4 first VL" = getTable1Stats("num_encs_to_vl1","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "# of encounter B4 second VL" = getTable1Stats("num_encs_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "# of encounter B4 third  VL" = getTable1Stats("num_encs_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var)
   #"NHIF at enrollment" = getTable1Stats("nhif","program",desc_both,statistics=stats,na.rm=na.rm.var)
           
           )%>%
    htmlTable( caption  = "<b> Socio-demographics </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
-              n.cgroup = c(1,9,1 ), cgroup = c('', 'Programs', '') ,tfoot="<sup>&Dagger;</sup>"
+              n.cgroup = c(1,9), cgroup = c('', 'Programs') ,tfoot="<sup>&Dagger;</sup>"
               )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
 
 
 
 ```
+
+
+
+
+```{r  results='asis', fig.keep='all', echo=FALSE, results='asis', fig.keep='all', eval=F }
+
+idata=dataset %>%
+ #filter(program=="AMPATH")%>%
+  mutate(year = as.numeric(format(vl1_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl1_date, "Yes", "No")))%>% 
+  filter(!is.na(vl_count1))
+
+xts( idata$vl_count1, order.by=idata$vl1_date ) %>% 
+  .['2014/2020-12-31']  %>% 
+  apply.monthly(. , mean) %>% 
+  ts( ., start = c(2014,1,1), frequency = 12) %>% 
+  ts_decompose(., type = "all") 
+  #ts_heatmap(.)
+
+```
+
+
+
+
+
+```{r fig.align='center',warning=FALSE, cache=F, eval=F}
+
+idata=dataset %>%
+ #filter(program=="MBARARA")%>%
+  mutate(year = as.numeric(format(vl1_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl1_date, "Yes", "No")))%>% 
+  filter(!is.na(num_days_to_vl1))
+
+xts( idata$num_days_to_vl1, order.by=idata$vl1_date ) %>% 
+  .['2014/2020-12-31']  %>% 
+  apply.monthly(. , mean) %>% 
+  ts( ., start = c(2014,1,1), frequency = 12) %>% 
+  ts_seasonal(., type = 'all', title = "Trends")
+ # ts_heatmap(.)
+
+```
+
+
+## Bivariate Plots
+
+To understand the relationship of each continuous variable with the y variable:
+
+1. Plot box plot for each of the variables to do a visual comparison between the groups
+2. Plot the explanatory variable distribution for both the variables to understand the variability uniquely explained (The non-intersecting part of the blue and the red is the variation explained by the variable)
+
+
+```{r fig.align='center', cache=F, fig.width=6, warning=FALSE}
+y <- c("vl_failure2","vl_failure1")
+x <- c('male','Death','civilstatusENROL', 'transfer','Height','Weight', 'entrypoint', 'nhif', 'bmi','program', "ageatarvstart", "ageatarvstartTHERAP",
+       'num_days_to_vl1','num_days_to_vl2','num_days_to_vl3', 'vl_count1','vl_count2','vl_count3', 'num_encs_to_vl1','num_encs_to_vl2','num_encs_to_vl3'
+       )
+raw_df=dataset%>%select(c(y,x))
+cont_univ_df <- raw_df %>% select_if(is.numeric) %>% dplyr::mutate(row_no =1:n() )
+
+for (value in  colnames(cont_univ_df[-ncol(cont_univ_df)]))  { 
+  print(value)
+  p1 <- ggplot2.histogram(raw_df%>%drop_na(vl_failure1), xName=value, backgroundColor="white",  bins=10,
+                         #brewerPalette="Paired",
+                         groupName="vl_failure1", legendPosition="top", xScale="log2",
+                         
+                         alpha=0.5, addDensity=TRUE,  removePanelGrid=TRUE ,removePanelBorder=TRUE,
+                         addMeanLine=TRUE, meanLineSize=1)+ theme_minimal()+ theme(legend.position="top")
+   p2<- ggboxplot(raw_df%>%drop_na(vl_failure1),   alpha=0.2, x = "vl_failure1", y = value, color = "vl_failure1", palette = "jco", add = "jitter")+
+          stat_compare_means()+ guides(fill=FALSE, color=FALSE)	+ theme_minimal()
+   
+  
+   p3 <- ggplot2.histogram(raw_df%>%drop_na(vl_failure2), xName=value, backgroundColor="white",  bins=10,
+                         #brewerPalette="Paired",
+                         groupName="vl_failure2", legendPosition="top", xScale="log2",
+                         
+                         alpha=0.5, addDensity=TRUE,  removePanelGrid=TRUE ,removePanelBorder=TRUE,
+                         addMeanLine=TRUE, meanLineSize=1)+ theme_minimal()+ theme(legend.position="top")
+   p4<- ggboxplot(raw_df%>%drop_na(vl_failure2), alpha=0.2, x = "vl_failure2", y = value, color = "vl_failure2", palette = "jco", add = "jitter")+
+    stat_compare_means()+ guides(fill=FALSE, color=FALSE)	+ theme_minimal()
+   
+   grid.arrange( p1,p2, p3,p4,nrow=2) 
+  # print(p2 )
+}
+
+
+#names(dataset)
+
+```
+
+
+
+# Univariate Analysis
+
+For each continuous column, visually check the following: 
+
+1. Variation in the column
+2. Its distribution
+3. Any outliers
+4. q-q plot with normal distribution
+
+
+```{r fig.align='center', cache=F, fig.width=5, warning=FALSE}
+
+
+for(column in colnames(cont_univ_df[-ncol(cont_univ_df)])){
+  
+  print(column)
+  p1 <- ggplot(cont_univ_df, aes_string(x='row_no', y= column)) +
+    geom_point(show.legend = FALSE) +
+    labs(x = 'Univariate plot', y=column) +
+    ggtitle(column) +
+    theme_minimal()
+
+  # Cumulative plot
+  legendcols <- c("Normal distribution"="darkred","Density"="darkBlue","Histogram"="lightBlue")
+  p2 <- ggplot(cont_univ_df,aes_string(x = column)) +
+    geom_histogram(aes(y=..density.., fill ="Histogram"), bins = 50) +
+    stat_function(fun = dnorm, aes(color="Normal distribution"),  size = 1,
+                args = list(mean = mean(cont_univ_df[[column]]),
+                            sd = sd(cont_univ_df[[column]]))) +
+  geom_density(aes(y=..density.., color="Density"),  size = 1)+
+  scale_colour_manual(name="Distribution",values=legendcols) +
+  scale_fill_manual(name="Bar",values=legendcols) +
+  theme_minimal() + theme(legend.position="none")
+
+  p3 <- ggplot(cont_univ_df %>% mutate(constant = column),
+    aes_string(x="constant", y= column, group = 123)) +
+    geom_boxplot() +
+    labs(y=column) +
+    theme_minimal()
+
+  p4 <- ggplot(cont_univ_df,aes_string(sample = column)) +
+    stat_qq() + stat_qq_line() +
+    theme_minimal()
+  grid.arrange(p1, p2, p3, p4, nrow=2)
+
+}
+```
+
+
+For categorical variables,visually check the frequencies and percentages.
+
+```{r fig.align='center',cache=F,  fig.width=5, warning=FALSE}
+
+univ_cat_df <- raw_df %>% select_if(function(col) {is.factor(col) | is.character(col)})
+plist= list()
+for(column in colnames(univ_cat_df)){
+gg = ggplot(univ_cat_df,aes_string(column)) +
+    geom_bar() + coord_flip() +
+    ggtitle(column) +
+    theme_minimal()
+plist[[column]]=gg
+if(length(plist)==4){
+  print(names(plist))
+  do.call("grid.arrange", c(plist,  nrow=2))
+  plist= list()
+}
+}
+
+
+```
+
