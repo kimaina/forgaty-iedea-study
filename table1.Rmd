@@ -1,15 +1,15 @@
 ---
 title: "Personalized Monitoring of HIV Viral Load Through Prognostic Healthcare (#179)"
 author: "IeDEA | FIMP"
-output:
-  Grmd::docx_document
----
+output: 
+  rmdformats::material:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
 
-<style type="text/css">
-body {
-  max-width: 90em !important;
-}
-</style>
+---
 
 ```{r setup, include=FALSE}
 options(java.parameters = "-Xmx15g")
@@ -169,14 +169,36 @@ getFirstNonNAInXMonths=function(data,m=3,var){
   #filter(apptdate == min(apptdate)) %>%
 }
 
+getBaselineOnArvStartWithinXMonths=function(data,m=3,var, refdate){
+  #first = dplyr::first(na.omit(value))
+  days=m*30
+  return(data %>%
+                  arrange(ptidno, `apptdate`) %>%
+                  group_by(ptidno) %>%
+                  filter(apptdate <= !!as.symbol(refdate)) %>%
+                  mutate(
+                    var_new=dplyr::first(na.omit(!!as.symbol(var)))
+                  )%>%
+                  ungroup())%>%
+                  filter(visit_num == 1)
+
+  #filter(apptdate == min(apptdate)) %>%
+}
+
 ```
 
 
+```{r warning=F,cache=T}
+# Import Dataset
+patient.cross.init =haven::read_sas("ak_vlmonitord.sas7bdat")
+patient.long.init =haven::read_sas("ak_vlmonitorl.sas7bdat")
+
+```
 
 
 ```{r warning=F}
-# Import Dataset
-patient.long = haven::read_sas("ak_vlmonitorl.sas7bdat") %>%
+# merge dataset
+patient.long = patient.long.init %>%
                   arrange(ptidno, `apptdate`) %>%
                   group_by(ptidno) %>%
                   mutate(visit_num = row_number())%>%
@@ -210,15 +232,19 @@ patient.long = haven::read_sas("ak_vlmonitorl.sas7bdat") %>%
                     # num encunters to vl
                     num_encs_to_vl1 = dplyr::nth(na.omit(ifelse(is.na(viralload), NA , visit_num-1)),1),
                     num_encs_to_vl2 = dplyr::nth(na.omit(ifelse(is.na(viralload), NA , visit_num-1)),2),
-                    num_encs_to_vl3 = dplyr::nth(na.omit(ifelse(is.na(viralload), NA , visit_num-1)),3)
+                    num_encs_to_vl3 = dplyr::nth(na.omit(ifelse(is.na(viralload), NA , visit_num-1)),3),
+                    
+                    # factor
+                    WHOstage= factor(WHOstage)
                     
                     
                   )%>%
-                  ungroup()
+                  ungroup() %>% left_join(patient.cross.init%>%select(ptidno, arvstart),  c("ptidno"="ptidno"))
                   
                   
 # handle AMPATH's data missing xrossection civilstatus
 civilstatus.cx=getFirstNonNAInXMonths(patient.long,3,'civilstatus')%>%select(ptidno, civilstatus=var_new)
+
 
 # handle all sites missing baseline features
 Height.cx=getFirstNonNAInXMonths(patient.long,3,'Height')%>%select(ptidno, Height=var_new)
@@ -226,17 +252,90 @@ Weight.cx=getFirstNonNAInXMonths(patient.long,3,'Weight')%>%select(ptidno, Weigh
 bmi.cx=getFirstNonNAInXMonths(patient.long,3,'bmi')%>%select(ptidno, bmi=var_new)
 nhif.cx=getFirstNonNAInXMonths(patient.long,3,'nhif')%>%select(ptidno, nhif=var_new)
 
+
+refdate='arvstart'
+
+# Generate baseline clinical covariates
+Cough.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'Cough', refdate)%>%select(ptidno, Cough=var_new)
+KSdiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'KSdiag', refdate)%>%select(ptidno, KSdiag=var_new)
+NephroCardiomyopathy.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'NephroCardiomyopathy', refdate)%>%select(ptidno, NephroCardiomyopathy=var_new)
+PillsTakenLast7Days.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'PillsTakenLast7Days', refdate)%>%select(ptidno, PillsTakenLast7Days=var_new)
+TBsignNone.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'TBsignNone', refdate)%>%select(ptidno, TBsignNone=var_new)
+WHOstage.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'WHOstage', refdate)%>%select(ptidno, WHOstage=var_new)
+
+cd4.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'cd4', refdate)%>%select(ptidno, cd4=var_new)
+cervicalcadiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'cervicalcadiag', refdate)%>%select(ptidno, cervicalcadiag=var_new)
+chronicisosporiasisdiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'chronicisosporiasisdiag', refdate)%>%select(ptidno, chronicisosporiasisdiag=var_new)
+coughTB.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'coughTB', refdate)%>%select(ptidno, coughTB=var_new)
+
+cryptococcdiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'cryptococcdiag', refdate)%>%select(ptidno, cryptococcdiag=var_new)
+cryptospordiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'cryptospordiag', refdate)%>%select(ptidno, cryptospordiag=var_new)
+cytomegdiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'cytomegdiag', refdate)%>%select(ptidno, cytomegdiag=var_new)
+encephaldiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'encephaldiag', refdate)%>%select(ptidno, encephaldiag=var_new)
+esocandiddiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'esocandiddiag', refdate)%>%select(ptidno, esocandiddiag=var_new)
+ethambutol.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'ethambutol', refdate)%>%select(ptidno, ethambutol=var_new)
+ethambutolinh.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'ethambutolinh', refdate)%>%select(ptidno, ethambutolinh=var_new)
+herpessvdiag.cx=getBaselineOnArvStartWithinXMonths(patient.long,1,'herpessvdiag', refdate)%>%select(ptidno, herpessvdiag=var_new)
+
+# binarize response
+binary.var =c(
+  'Cough','KSdiag','NephroCardiomyopathy','TBsignNone','cervicalcadiag','chronicisosporiasisdiag',
+  'coughTB','cryptococcdiag','cryptospordiag','cytomegdiag','encephaldiag','esocandiddiag','ethambutol',
+  'ethambutolinh','herpessvdiag'
+)
+
+
+
+binarize <- function(x) {
+  case_when(
+               x=='1'~ "Yes",
+               x=='0'~ "No",
+              is.na(x) ~ "No",
+              TRUE ~ x)
+  
+}
+
 # perform joining on the missing varibles
-patient.cross = haven::read_sas("ak_vlmonitord.sas7bdat")%>%
+patient.cross = patient.cross.init%>%
                    mutate(transfer=ifelse(is.na(transfer)==T,0,1))%>%
                    left_join(civilstatus.cx,  c("ptidno"="ptidno"))%>%
                    left_join(Height.cx,  c("ptidno"="ptidno"))%>%
                    left_join(Weight.cx,  c("ptidno"="ptidno"))%>%
                    left_join(bmi.cx,  c("ptidno"="ptidno"))%>%
                    left_join(nhif.cx,  c("ptidno"="ptidno"))%>%
+  
+                   left_join(Cough.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(KSdiag.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(NephroCardiomyopathy.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(PillsTakenLast7Days.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(TBsignNone.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(WHOstage.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(cd4.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(cervicalcadiag.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(chronicisosporiasisdiag.cx,  c("ptidno"="ptidno"))%>%
+  
+                   left_join(coughTB.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(cryptococcdiag.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(cryptospordiag.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(cytomegdiag.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(encephaldiag.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(esocandiddiag.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(ethambutol.cx,  c("ptidno"="ptidno"))%>%
+  
+                   left_join(ethambutolinh.cx,  c("ptidno"="ptidno"))%>%
+                   left_join(herpessvdiag.cx,  c("ptidno"="ptidno"))%>%
+  
                    mutate(
                       civilstatusENROL=ifelse(program=="AMPATH",civilstatus,civilstatusENROL)
-                    )
+                     
+                    )%>%
+                   mutate(across(binary.var, as.character))%>%
+                   mutate(across(binary.var, binarize))%>%
+                   mutate(across(binary.var, as.factor))
+  
+
+
+
 
 #merge master dataset
 dataset=patient.cross %>%  left_join(select(filter(patient.long, visit_num == 1),
@@ -284,6 +383,7 @@ patient.long %>% select(ptidno,visit_num,apptdate,VLundetectable,viralload,viral
    filter(ptidno==52764) %>% arrange(ptidno, `apptdate`)  %>% kable () %>% 
   kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
 ```
+
 # Viral Load Counts
 
 We will start by looking at the overall distribution of VL
@@ -291,7 +391,7 @@ We will start by looking at the overall distribution of VL
 ## Distribution
 
 
-```{r fig.align='center',warning=FALSE, cache=F}
+```{r fig.align='center',warning=FALSE, cache=T}
 hiv_dfl=dataset%>%filter(!is.na(vl_count1))
 
 
@@ -344,7 +444,7 @@ Is a cutoff of 1000 valid with relation to VL detectability limit? To understll 
 
 ## Overall Viral Load Counts Detection Limit
 
-```{r fig.align='center',warning=FALSE, cache=F}
+```{r fig.align='center',warning=FALSE, cache=T}
 
 patient.long.cross %>%
   filter(!is.na(viralload))%>%
@@ -362,7 +462,7 @@ patient.long.cross %>%
 
 ## MBARARA Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE, cache=F}
+```{r fig.align='center',warning=FALSE, cache=T}
 
  patient.long.cross %>%
   filter(program=="MBARARA")%>%
@@ -380,7 +480,7 @@ patient.long.cross %>%
 
 ## MASAKA Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 patient.long.cross %>%
   filter(program=="MASAKA")%>%
@@ -399,7 +499,7 @@ patient.long.cross %>%
 
 ## RAKAI Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 
 a = patient.long.cross %>%
@@ -434,7 +534,7 @@ ggarrange(a,b,
 
 ## IDI Viral Load  Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 patient.long.cross %>%
   filter(program=="IDI")%>%
@@ -453,7 +553,7 @@ patient.long.cross %>%
 
 ## AMPATH Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 
 a = patient.long.cross %>%
@@ -490,7 +590,7 @@ ggarrange(a,b,
 
 ## FACES Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 patient.long.cross %>%
   filter(program=="FACES")%>%
@@ -512,7 +612,7 @@ patient.long.cross %>%
 
 ## KISESA Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 patient.long.cross %>%
   filter(program=="KISESA")%>%
@@ -531,7 +631,7 @@ patient.long.cross %>%
 
 ## MOROGORO Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 patient.long.cross %>%
   filter(program=="MOROGORO")%>%
@@ -550,7 +650,7 @@ patient.long.cross %>%
 
 ## TUMBI Viral Load Detection Limit
 
-```{r fig.align='center',warning=FALSE,cache=F}
+```{r fig.align='center',warning=FALSE,cache=T}
 
 patient.long.cross %>%
   filter(program=="TUMBI")%>%
@@ -571,7 +671,7 @@ We also need to look if this is consisten with VL index
 
 ## Viral Load 1 Detection Limit
 
-```{r fig.align='center',warning=FALSE, cache=F}
+```{r fig.align='center',warning=FALSE, cache=T}
 
 dataset %>%
   mutate(year = as.numeric(format(vl1_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl1_date, "Yes", "No")))%>% 
@@ -588,7 +688,7 @@ dataset %>%
 
 ## Viral Load 2 Detection Limit
 
-```{r fig.align='center',warning=FALSE, cache=F}
+```{r fig.align='center',warning=FALSE, cache=T}
 
 dataset %>%
   mutate(year = as.numeric(format(vl2_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl2_date, "Yes", "No")))%>% 
@@ -606,7 +706,7 @@ dataset %>%
 
 ## Viral Load 3 Detection Limit
 
-```{r fig.align='center',warning=FALSE, cache=F}
+```{r fig.align='center',warning=FALSE, cache=T}
 
 dataset %>%
   mutate(year = as.numeric(format(vl3_date,'%Y')), on_ART=factor(ifelse(arvstartTHERAP<=vl3_date, "Yes", "No")))%>% 
@@ -623,6 +723,35 @@ dataset %>%
 
 
 
+## Viral Load Count | Programs
+
+```{r fig.align='center',warning=FALSE}
+na.rm.var=F;stats=F
+
+# Getting descriptive statistics 
+mergeDesc(
+  
+  "First VL count" = getTable1Stats("vl_count1","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Second VL count" = getTable1Stats("vl_count2","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Third VL count" = getTable1Stats("vl_count3","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Days (from enrollment) to first VL" = getTable1Stats("num_days_to_vl1","program",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "Days (from enrollment) to second VL" = getTable1Stats("num_days_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "Days (from enrollment) to third VL" = getTable1Stats("num_days_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "Days (from 1st VL) to second VL" = getTable1Stats("days_from_vl1_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "Days (from 2nd VL) to thrid VL" = getTable1Stats("days_from_vl2_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var),
+   "# of encounter B4 first VL" = getTable1Stats("num_encs_to_vl1","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "# of encounter B4 second VL" = getTable1Stats("num_encs_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
+  "# of encounter B4 third  VL" = getTable1Stats("num_encs_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var)
+  #"NHIF at enrollment" = getTable1Stats("nhif","program",desc_both,statistics=stats,na.rm=na.rm.var)
+          
+          )%>%
+   htmlTable( caption  = "<b> Socio-demographics </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,9), cgroup = c('', 'Programs') ,tfoot="<sup>&Dagger;</sup>"
+              )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
 
 
 
@@ -630,7 +759,7 @@ dataset %>%
 
 ## Socio-demographics Missing Data Summary
 
-```{r fig.align='center',warning=FALSE}
+```{r fig.align='center',warning=FALSE, cache=T}
 x=c('male','Death','civilstatusENROL', 'transfer','Height','Weight', 'entrypoint', 'nhif', 'bmi','program', 'ageatarvstart' )
 y=c('vl_count1','vl_count2','vl_count3')
 kable( dataset%>%select(c(x,y)) %>%naniar::miss_var_summary()%>%top_n(20,n_miss))
@@ -660,11 +789,11 @@ gridExtra::grid.arrange(p1,p2,p3,
 To understand the relationship of each variable with the outcome variable:
 
 
+## Socio-demographics
 
+### Overall Socio-demographics Correlation
 
-## Overall Socio-demographics Correlation
-
-```{r fig.align='center',warning=FALSE}
+```{r fig.align='center',warning=FALSE, cache=T}
 PerformanceAnalytics::chart.Correlation(dataset%>%
                                           mutate(
                                             male=ifelse(male=="Yes", 1,0),
@@ -678,8 +807,8 @@ PerformanceAnalytics::chart.Correlation(dataset%>%
 
 ```
 
-## Socio-demographics | Viral Load Failure 1
-```{r fig.align='center',warning=FALSE}
+### Socio-demographics | Viral Load Failure 1
+```{r fig.align='center',warning=FALSE, cache=T}
 na.rm.var=F;stats=T
 
 # Getting descriptive statistics 
@@ -717,7 +846,7 @@ naniar::gg_miss_upset(dataset%>%select(x, 'vl_failure1'), nsets = 5,nintersects 
 
 ```
 
-## Socio-demographics | Viral Load Failure 2
+### Socio-demographics | Viral Load Failure 2
 ```{r fig.align='center',warning=FALSE}
 na.rm.var=F;stats=T
 
@@ -755,7 +884,7 @@ naniar::gg_miss_upset(dataset%>%select(x, 'vl_failure2'), nsets = 5,nintersects 
 
 ```
 
-## Socio-demographics | Viral Load Failure 3
+### Socio-demographics | Viral Load Failure 3
 ```{r fig.align='center',warning=FALSE}
 na.rm.var=F;stats=T
 
@@ -793,7 +922,7 @@ naniar::gg_miss_upset(dataset%>%select(x, 'vl_failure3'), nsets = 5,nintersects 
 
 ```
 
-## Socio-demographics | Program
+### Socio-demographics | Program
 ```{r fig.align='center',warning=FALSE}
 na.rm.var=F;stats=F
 
@@ -829,34 +958,66 @@ naniar::gg_miss_upset(dataset%>%select(x, 'program'), nsets = 5,nintersects = NA
 
 ```
 
-## Viral Load Count | Programs
-```{r fig.align='center',warning=FALSE}
-na.rm.var=F;stats=F
+
+
+
+## Clinical Profile
+
+### Overall Clinical Profile Correlation
+
+```{r fig.align='center',warning=FALSE, cache=F}
+
+
+
+```
+
+### Clinical Profile | Viral Load Failure 1
+```{r fig.align='center',warning=FALSE, cache=F}
+na.rm.var=F;stats=T
 
 # Getting descriptive statistics 
 mergeDesc(
-  
-  "First VL count" = getTable1Stats("vl_count1","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "Second VL count" = getTable1Stats("vl_count2","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "Third VL count" = getTable1Stats("vl_count3","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "Days (from enrollment) to first VL" = getTable1Stats("num_days_to_vl1","program",desc_both,statistics=stats,na.rm=na.rm.var),       
-  "Days (from enrollment) to second VL" = getTable1Stats("num_days_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),   
-  "Days (from enrollment) to third VL" = getTable1Stats("num_days_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var), 
-  "Days (from 1st VL) to second VL" = getTable1Stats("days_from_vl1_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "Days (from 2nd VL) to thrid VL" = getTable1Stats("days_from_vl2_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var),
-   "# of encounter B4 first VL" = getTable1Stats("num_encs_to_vl1","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "# of encounter B4 second VL" = getTable1Stats("num_encs_to_vl2","program",desc_both,statistics=stats,na.rm=na.rm.var),
-  "# of encounter B4 third  VL" = getTable1Stats("num_encs_to_vl3","program",desc_both,statistics=stats,na.rm=na.rm.var)
-  #"NHIF at enrollment" = getTable1Stats("nhif","program",desc_both,statistics=stats,na.rm=na.rm.var)
+
+  "Cough" = getTable1Stats("Cough","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),  
+  "KSdiag" = getTable1Stats("KSdiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "NephroCardiomyopathy" = getTable1Stats("NephroCardiomyopathy","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "PillsTakenLast7Days" = getTable1Stats("PillsTakenLast7Days","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "TBsignNone" = getTable1Stats("TBsignNone","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "WHOstage" = getTable1Stats("WHOstage","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "cd4" = getTable1Stats("cd4","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "cervicalcadiag" = getTable1Stats("cervicalcadiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  #"chronicisosporiasisdiag" = getTable1Stats("chronicisosporiasisdiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),  
+  "coughTB" = getTable1Stats("coughTB","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),       
+  "cryptococcdiag" = getTable1Stats("cryptococcdiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),   
+  "cryptospordiag" = getTable1Stats("cryptospordiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var), 
+  "cytomegdiag" = getTable1Stats("cytomegdiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "encephaldiag" = getTable1Stats("encephaldiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "esocandiddiag" = getTable1Stats("esocandiddiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "ethambutol" = getTable1Stats("ethambutol","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),
+  "ethambutolinh" = getTable1Stats("ethambutolinh","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var),  
+  "herpessvdiag" = getTable1Stats("herpessvdiag","vl_failure1",desc_both,statistics=stats,na.rm=na.rm.var)
+ 
           
           )%>%
-   htmlTable( caption  = "<b> Socio-demographics </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
-              n.cgroup = c(1,9), cgroup = c('', 'Programs') ,tfoot="<sup>&Dagger;</sup>"
+   htmlTable( caption  = "<b> Clinical Profile  | Viral Load Failure 1 </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,2,1 ), cgroup = c('', 'First Virologic Failure', '') ,tfoot="<sup>&Dagger;</sup>"
               )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
 
 
 
 ```
+
+
+### Clinical Profile | Viral Load Failure 2
+```{r fig.align='center',warning=FALSE, cache=T}
+na.rm.var=F;stats=T
+
+
+
+```
+
+
+
 
 
 
@@ -881,7 +1042,7 @@ xts( idata$vl_count1, order.by=idata$vl1_date ) %>%
 
 
 
-```{r fig.align='center',warning=FALSE, cache=F, eval=F}
+```{r fig.align='center',warning=FALSE, cache=T, eval=F}
 
 idata=dataset %>%
  #filter(program=="MBARARA")%>%
@@ -905,8 +1066,9 @@ To understand the relationship of each continuous variable with the y variable:
 1. Plot box plot for each of the variables to do a visual comparison between the groups
 2. Plot the explanatory variable distribution for both the variables to understand the variability uniquely explained (The non-intersecting part of the blue and the red is the variation explained by the variable)
 
+## Socio-demographics
 
-```{r fig.align='center', cache=F, fig.width=6, warning=FALSE}
+```{r fig.align='center', cache=T, fig.width=6, warning=FALSE}
 y <- c("vl_failure2","vl_failure1")
 x <- c('male','Death','civilstatusENROL', 'transfer','Height','Weight', 'entrypoint', 'nhif', 'bmi','program', "ageatarvstart", "ageatarvstartTHERAP",
        'num_days_to_vl1','num_days_to_vl2','num_days_to_vl3', 'vl_count1','vl_count2','vl_count3', 'num_encs_to_vl1','num_encs_to_vl2','num_encs_to_vl3'
@@ -956,7 +1118,7 @@ For each continuous column, visually check the following:
 4. q-q plot with normal distribution
 
 
-```{r fig.align='center', cache=F, fig.width=5, warning=FALSE}
+```{r fig.align='center', cache=T, fig.width=5, warning=FALSE}
 
 
 for(column in colnames(cont_univ_df[-ncol(cont_univ_df)])){
@@ -997,7 +1159,7 @@ for(column in colnames(cont_univ_df[-ncol(cont_univ_df)])){
 
 For categorical variables,visually check the frequencies and percentages.
 
-```{r fig.align='center',cache=F,  fig.width=5, warning=FALSE}
+```{r fig.align='center',cache=T,  fig.width=5, warning=FALSE}
 
 univ_cat_df <- raw_df %>% select_if(function(col) {is.factor(col) | is.character(col)})
 plist= list()
