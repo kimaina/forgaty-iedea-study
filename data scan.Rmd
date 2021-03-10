@@ -1,0 +1,530 @@
+---
+title: "Personalized Monitoring of HIV Viral Load Through Prognostic Healthcare (#179)"
+author: "IeDEA | FIMP"
+
+---
+
+```{r setup, include=FALSE}
+options(java.parameters = "-Xmx15g")
+
+knitr::opts_chunk$set(warning=FALSE,
+                      message=FALSE,
+                      echo=FALSE,
+                      #dpi=96,
+                     # fig.width=7,# fig.height=4, # Default figure widths
+                     # dev="png", #dev.args=list(type="cairo"), # The png device
+                      # Change to dev="postscript" if you want the EPS-files
+                      # for submitting. Also remove the dev.args() as the postscript
+                      # doesn't accept the type="cairo" argument.
+                      error=FALSE)
+ 
+# Evaluate the figure caption after the plot
+#knitr::opts_knit$set(eval.after='fig.cap')
+ 
+# Use the table counter that the htmlTable() provides
+options(table_counter = TRUE)
+ 
+# Use the figCapNo() with roman letters
+#options(fig_caption_no_roman = TRUE)
+#options(kableExtra.latex.load_packages = F)
+
+# Then install the Grmd-package by running below code:
+#devtools::install_github("gforge/Grmd")
+
+
+# function to install missing packages
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg))
+    install.packages(new.pkg, dependencies = TRUE, repos='http://cran.rstudio.com/')
+  sapply(pkg, require, character.only = TRUE)
+}
+
+#install.packages('package_name', dependencies=TRUE, repos='http://cran.rstudio.com/')
+
+packages =c( "dplyr",  "readxl","Hmisc","Gmisc", "magrittr", "flextable", "MASS", "tidyverse", "caret", "knitr", "kableExtra","xtable", "stargazer", "ggpubr", "haven", "PerformanceAnalytics", "naniar", "gridExtra", "ggthemes", "TSstudio")
+
+ipak(packages)
+
+# packages not pubished
+#devtools::install_github("kassambara/easyGgplot2")
+library(easyGgplot2)
+
+# packages not pubished
+#devtools::install_github('cttobin/ggthemr')
+#library(ggthemr)
+
+
+select = dplyr::select; summarize = dplyr::summarize; rename = dplyr::rename; mutate = dplyr::mutate;
+
+#ggthemr("flat")
+
+#source("unbalanced_functions.R")
+source("table1_utils.R")
+```
+
+
+
+```{r warning=FALSE}
+rural.cb <- tibble::tribble(
+              ~code, ~label,
+                     1,'Urban', 2,'Mostly urban', 3,'Mostly rural', 4,'Rural', 9,'Unknown'
+              )
+
+level.cb <- tibble::tribble(
+              ~code, ~label,
+                     1,'Health centre',2,'District hospital',3,'Regional, provincial or university hospital',9,'Unknown'
+              )
+
+civstfmt.cb <- tibble::tribble(
+              ~code, ~label,
+                      1,'Never Married and Not Living w/Partner',2,'Legally Married',3,'Living w/Partner',4,'Separated',5,'Divorced',6,'Widowed'
+              )
+
+entptfmt.cb <- tibble::tribble(
+              ~code, ~label,
+                        1,'outpatient care',2,'inpatient care',3,'pmtct care',4,'TB ward care',
+                        5,'community-based org',6,'private care',7,'self-referral',8,'other',
+                        9,'RTC (routine testing and counseling)',10,'VCT',11,'HCT(home-based)',
+                        12,'MCH (mother child health)',13,'TB clinic',14,'Research Institute',15,'Family Member',
+                        16,'Transfer-In',17,'STI Clinic',18,'Unknown',19,'Exposed infant',20,'Under 5 yrs',
+                        21,'IDU outreach',22,'YYC(Young Child Clinic)'
+              )
+
+
+pillfmt.cb <- tibble::tribble(
+              ~code, ~label,
+                      1,'none',2,'very few',3,'about half',4,'most',5,'all'
+              )
+
+adhfmt.cb <- tibble::tribble(
+              ~code, ~label,
+                     1,'Good: 3 or fewer missed doses since last visit',
+                     2,'Poor: 4 or more missed doses since last visit',3,'Good: fewer than 2 missed days',
+                     4,'Poor: 2 or more missed days'
+              )
+
+arvadfmt.cb <- tibble::tribble(
+              ~code, ~label,
+                     1,'GOOD (>, 95%)',2,'FAIR (85-94%)',3,'POOR (< 85%)'
+              )
+
+ynfmt.cb <- tibble::tribble(
+              ~code, ~label,
+                      1,'Yes',2,'No'
+              )
+
+zeroonefmt.cb <- tibble::tribble(
+              ~code, ~label,
+                      1,'Yes',0,'No'
+              )
+```
+
+
+```{r warning=F}
+getFirstXnonNA=function(data,n=3,var){
+  #first = dplyr::first(na.omit(value))
+  return(data %>%
+                  arrange(ptidno, `apptdate`) %>%
+                  group_by(ptidno) %>%
+                  filter(visit_num <= n) %>%
+                  mutate(
+                    var_new=dplyr::first(na.omit(!!as.symbol(var)))
+                  )%>%
+                  ungroup())%>%
+                  filter(visit_num == 1)
+
+  #filter(apptdate == min(apptdate)) %>%
+}
+
+getFirstNonNAInXMonths=function(data,m=3,var){
+  #first = dplyr::first(na.omit(value))
+  days=m*30
+  return(data %>%
+                  arrange(ptidno, `apptdate`) %>%
+                  group_by(ptidno) %>%
+                  filter(apptdate <= min(apptdate)+days) %>%
+                  mutate(
+                    var_new=dplyr::first(na.omit(!!as.symbol(var)))
+                  )%>%
+                  ungroup())%>%
+                  filter(visit_num == 1)
+
+  #filter(apptdate == min(apptdate)) %>%
+}
+
+getBaselineOnArvStartWithinXMonths=function(data,m=3,var, refdate){
+  #first = dplyr::first(na.omit(value))
+  days=m*30
+  return(data %>%
+                  arrange(ptidno, `apptdate`) %>%
+                  group_by(ptidno) %>%
+                  filter(apptdate <= !!as.symbol(refdate)) %>%
+                  mutate(
+                    var_new=dplyr::first(na.omit(!!as.symbol(var)))
+                  )%>%
+                  ungroup())%>%
+                  filter(visit_num == 1)
+
+  #filter(apptdate == min(apptdate)) %>%
+}
+
+
+
+binarize <- function(x) {
+  case_when(
+               x=='1'~ "Yes",
+               x=='0'~ "No",
+              is.na(x) ~ "No",
+              TRUE ~ x)
+  
+}
+
+
+```
+
+
+```{r warning=F,cache=T}
+load("main.dataset.Rda")
+#merge master dataset
+dataset=dataset.cx.arv
+#Replace numerical codes with strings from codebook
+dataset$civilstatusENROL <- factor(civstfmt.cb[match(dataset$civilstatusENROL, civstfmt.cb$code), ]$label)
+#dataset$male <- factor(zeroonefmt.cb[match(dataset$male, zeroonefmt.cb$code), ]$label)
+dataset$transfer <- factor(zeroonefmt.cb[match(dataset$transfer, zeroonefmt.cb$code), ]$label)
+dataset$Death <- factor(zeroonefmt.cb[match(dataset$Death, zeroonefmt.cb$code), ]$label)
+dataset$nhif <- factor(zeroonefmt.cb[match(dataset$nhif, zeroonefmt.cb$code), ]$label)
+dataset$entrypoint = factor(entptfmt.cb[match(dataset$entrypoint, entptfmt.cb$code), ]$label) 
+
+dataset= dataset %>% 
+                 mutate(across(c('Death','male', 'entrypoint', "civilstatusENROL", "transfer", "nhif"), as.factor)) 
+```
+
+
+
+
+```{r fig.align='center',warning=FALSE, cache=T}
+x=c('male','Death','civilstatusENROL', 'transfer','Height','Weight', 'entrypoint', 'nhif', 'bmi','program', 'ageatarvstart' )
+y=c('vl_count1','vl_count2','vl_count3')
+
+```
+
+
+
+
+
+
+## Potential Variables
+
+
+```{r fig.align='center',warning=FALSE, cache=F}
+
+# binarize response
+binary.var =c(
+  'Cough','KSdiag','NephroCardiomyopathy','TBsignNone','cervicalcadiag','chronicisosporiasisdiag',
+  'coughTB','cryptococcdiag','cryptospordiag','cytomegdiag','encephaldiag','esocandiddiag','ethambutol',
+  'ethambutolinh','herpessvdiag','WeightLoss','inh','inhtbtx','lymphomadiag',
+  'mdrTbTx','mycobacdiag','mycosisdiag','nightsweats','nightsweatsTB','lymphomadiag','oiProph','on_ARV','otherTbTx',
+  'pcpdiag','pmldiag','pyrazinamide','rifabutin','rifafour','rifampicin','rifater','rifinah','rsbPneumoniaDiag','salmonelladiag',
+  'streptomycin','tbextrapulmdiag','tbpulmdiag','tbtx','three_FDC','wastingsyndiag','toxoplasdiag','weightlossTB'
+)
+
+```
+
+
+
+![Patient timeline](timeline.png)
+
+### Clinical Profile Prior to ART Initiation | Viral Load Failure 1
+
+
+
+```{r fig.align='center',warning=FALSE, cache=T} 
+na.rm.var=F;stats=T;dataset.cx=dataset.cx.arv;outcome="vl_failure1";
+
+# Getting descriptive statistics 
+mergeDesc(
+  
+  # vitals
+  #"current ARV status" = getTable1Stats("on_ARV",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+   "age at first exposure to ARV" = getTable1Stats("ageatarvstart",outcome,desc_both,statistics=stats,na.rm=na.rm.var),  
+  "male gender" = getTable1Stats("male",outcome,desc_both,statistics=stats,na.rm=na.rm.var),
+ "civil status at enrollment" = getTable1Stats("civilstatusENROL",outcome,desc_both,statistics=stats,na.rm=na.rm.var), 
+  "weight" = getTable1Stats("weight",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Weight Loss" = getTable1Stats("WeightLoss",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "BMI" = getTable1Stats("BMI",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "hemoglobin" = getTable1Stats("hgb",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "CD4" = getTable1Stats("cd4",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Cough" = getTable1Stats("Cough",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Night Sweats" = getTable1Stats("nightsweats",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+  # staging
+  "WHO stage" = getTable1Stats("WHOstage",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Staging: Symptomatic HIV-associated Nephropathy/Cardiomyopathy" = getTable1Stats("NephroCardiomyopathy",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+   # TB symptoms
+  "TB sign: none" = getTable1Stats("TBsignNone",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB sign: cough" = getTable1Stats("coughTB",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "TB sign: weight loss" = getTable1Stats("weightlossTB",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+
+  
+   # Diagnosis
+  "Diagnosis: recurrent severe bacterial pneumonia" = getTable1Stats("rsbPneumoniaDiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Recurrent Septicemia including non-typhoidal Salmonella" = getTable1Stats("salmonelladiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: HIV Wasting Syndrome" = getTable1Stats("wastingsyndiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Toxoplasmosis, CNS" = getTable1Stats("toxoplasdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "Diagnosis: Extrapulmonary TB" = getTable1Stats("tbextrapulmdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Diagnosis: Pulmonary TB" = getTable1Stats("tbpulmdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Lymphoma (cerebral or B-cell non-Hodgkin)" = getTable1Stats("lymphomadiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Kaposi's Sarcoma" = getTable1Stats("KSdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "Diagnosis: Cervical Cancer" = getTable1Stats("cervicalcadiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  #"Diagnosis: Chronic Isosporiasis" = getTable1Stats("chronicisosporiasisdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  #"Diagnosis: Disseminated non-TB Mycobacterial Infection" = getTable1Stats("mycobacdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  #"Diagnosis: Disseminated Mycosis" = getTable1Stats("mycosisdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Extrapulmonary Cryptococcosis/Meningitis" = getTable1Stats("cryptococcdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Cryptosporidiosis" = getTable1Stats("cryptospordiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "Diagnosis: Cytomegalovirus Disease" = getTable1Stats("cytomegdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: HIV Encephalopathy" = getTable1Stats("encephaldiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Candidiasis (Oesophageal, Bronchi, Trachea, or Lungs)" = getTable1Stats("esocandiddiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Chronic Herpes Simplex" = getTable1Stats("herpessvdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Pneumocystis Pneumonia" = getTable1Stats("pcpdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Progressive Multifocal Leukoencephalopathy" = getTable1Stats("pmldiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  
+  # TB Prophylaxis
+  "anti-TB med: Rifabutin" = getTable1Stats("rifabutin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Rifafour(RHZE)" = getTable1Stats("rifafour",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "anti-TB med: Rifampicin(R)" = getTable1Stats("rifampicin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "anti-TB med: Rifater(RHZ)" = getTable1Stats("rifater",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Rifinah(RH)" = getTable1Stats("rifinah",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Streptomycin" = getTable1Stats("streptomycin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: 3-FDC(RHE)" = getTable1Stats("three_FDC",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Ethambutol(E)" = getTable1Stats("ethambutol",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Ethambutol(E)" = getTable1Stats("ethambutolinh",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "anti-TB med: INH" = getTable1Stats("inhtbtx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Other" = getTable1Stats("otherTbTx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+   #"anti-TB med: Multi-Drug Resistant Tx" = getTable1Stats("mdrTbTx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Pyrazinamide(Z)" = getTable1Stats("pyrazinamide",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB Prophylaxis: INH" = getTable1Stats("inh",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+  
+  "OI Prophylaxis" = getTable1Stats("oiProph",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB treatment" = getTable1Stats("tbtx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+ 
+  
+   # ARVS
+  "# current ARVs" = getTable1Stats("numARVs",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "ARVs taken last 7 days" = getTable1Stats("PillsTakenLast7Days",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "ART adherence: percent taken since last visit" = getTable1Stats("art_adherence",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "ARV Adherence- combines formats from both the old and the new CTC 2" = getTable1Stats("art_adherence2",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "ARV adherence since last visit" = getTable1Stats("arvadherence",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var)
+  #"ART regimen" = getTable1Stats("regimen",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var)
+  
+ 
+ 
+          
+          )%>%
+   htmlTable( caption  = "<b> Clinical Profile Prior to ART Initiation | Viral Load Failure 2 </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,2,1 ), cgroup = c('', 'Second Virologic Failure', '') ,tfoot="<sup>&Dagger;</sup>"
+              )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
+
+### Clinical Profile Prior to ART Initiation | Viral Load Failure 2
+
+
+
+```{r fig.align='center',warning=FALSE, cache=T} 
+na.rm.var=F;stats=T;dataset.cx=dataset.cx.arv;outcome="vl_failure2";
+
+# Getting descriptive statistics 
+mergeDesc(
+  
+  # vitals
+  #"current ARV status" = getTable1Stats("on_ARV",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+   "age at first exposure to ARV" = getTable1Stats("ageatarvstart",outcome,desc_both,statistics=stats,na.rm=na.rm.var),  
+  "male gender" = getTable1Stats("male",outcome,desc_both,statistics=stats,na.rm=na.rm.var),
+ "civil status at enrollment" = getTable1Stats("civilstatusENROL",outcome,desc_both,statistics=stats,na.rm=na.rm.var), 
+  "weight" = getTable1Stats("weight",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Weight Loss" = getTable1Stats("WeightLoss",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "BMI" = getTable1Stats("BMI",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "hemoglobin" = getTable1Stats("hgb",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "CD4" = getTable1Stats("cd4",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Cough" = getTable1Stats("Cough",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Night Sweats" = getTable1Stats("nightsweats",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+  # staging
+  "WHO stage" = getTable1Stats("WHOstage",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Staging: Symptomatic HIV-associated Nephropathy/Cardiomyopathy" = getTable1Stats("NephroCardiomyopathy",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+   # TB symptoms
+  "TB sign: none" = getTable1Stats("TBsignNone",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB sign: cough" = getTable1Stats("coughTB",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "TB sign: weight loss" = getTable1Stats("weightlossTB",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+
+  
+   # Diagnosis
+  "Diagnosis: recurrent severe bacterial pneumonia" = getTable1Stats("rsbPneumoniaDiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Recurrent Septicemia including non-typhoidal Salmonella" = getTable1Stats("salmonelladiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: HIV Wasting Syndrome" = getTable1Stats("wastingsyndiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Toxoplasmosis, CNS" = getTable1Stats("toxoplasdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "Diagnosis: Extrapulmonary TB" = getTable1Stats("tbextrapulmdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Diagnosis: Pulmonary TB" = getTable1Stats("tbpulmdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Lymphoma (cerebral or B-cell non-Hodgkin)" = getTable1Stats("lymphomadiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Kaposi's Sarcoma" = getTable1Stats("KSdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "Diagnosis: Cervical Cancer" = getTable1Stats("cervicalcadiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  #"Diagnosis: Chronic Isosporiasis" = getTable1Stats("chronicisosporiasisdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  #"Diagnosis: Disseminated non-TB Mycobacterial Infection" = getTable1Stats("mycobacdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  #"Diagnosis: Disseminated Mycosis" = getTable1Stats("mycosisdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Extrapulmonary Cryptococcosis/Meningitis" = getTable1Stats("cryptococcdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Cryptosporidiosis" = getTable1Stats("cryptospordiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "Diagnosis: Cytomegalovirus Disease" = getTable1Stats("cytomegdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: HIV Encephalopathy" = getTable1Stats("encephaldiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Candidiasis (Oesophageal, Bronchi, Trachea, or Lungs)" = getTable1Stats("esocandiddiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Chronic Herpes Simplex" = getTable1Stats("herpessvdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Pneumocystis Pneumonia" = getTable1Stats("pcpdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Progressive Multifocal Leukoencephalopathy" = getTable1Stats("pmldiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  
+  # TB Prophylaxis
+  "anti-TB med: Rifabutin" = getTable1Stats("rifabutin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Rifafour(RHZE)" = getTable1Stats("rifafour",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "anti-TB med: Rifampicin(R)" = getTable1Stats("rifampicin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "anti-TB med: Rifater(RHZ)" = getTable1Stats("rifater",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Rifinah(RH)" = getTable1Stats("rifinah",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Streptomycin" = getTable1Stats("streptomycin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: 3-FDC(RHE)" = getTable1Stats("three_FDC",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Ethambutol(E)" = getTable1Stats("ethambutol",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Ethambutol(E)" = getTable1Stats("ethambutolinh",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "anti-TB med: INH" = getTable1Stats("inhtbtx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Other" = getTable1Stats("otherTbTx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+   #"anti-TB med: Multi-Drug Resistant Tx" = getTable1Stats("mdrTbTx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Pyrazinamide(Z)" = getTable1Stats("pyrazinamide",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB Prophylaxis: INH" = getTable1Stats("inh",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+  
+  "OI Prophylaxis" = getTable1Stats("oiProph",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB treatment" = getTable1Stats("tbtx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+ 
+  
+   # ARVS
+  "# current ARVs" = getTable1Stats("numARVs",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "ARVs taken last 7 days" = getTable1Stats("PillsTakenLast7Days",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "ART adherence: percent taken since last visit" = getTable1Stats("art_adherence",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "ARV Adherence- combines formats from both the old and the new CTC 2" = getTable1Stats("art_adherence2",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "ARV adherence since last visit" = getTable1Stats("arvadherence",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var)
+  #"ART regimen" = getTable1Stats("regimen",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var)
+  
+ 
+ 
+          
+          )%>%
+   htmlTable( caption  = "<b> Clinical Profile Prior to ART Initiation | Viral Load Failure 2 </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,2,1 ), cgroup = c('', 'Second Virologic Failure', '') ,tfoot="<sup>&Dagger;</sup>"
+              )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
+
+
+
+### Clinical Profile Prior to ART Initiation | Viral Load Failure 3
+
+
+
+```{r fig.align='center',warning=FALSE, cache=T} 
+na.rm.var=F;stats=T;dataset.cx=dataset.cx.arv;outcome="vl_failure3";
+
+# Getting descriptive statistics 
+mergeDesc(
+  
+  # vitals
+  #"current ARV status" = getTable1Stats("on_ARV",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "weight" = getTable1Stats("weight",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Weight Loss" = getTable1Stats("WeightLoss",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "BMI" = getTable1Stats("BMI",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "hemoglobin" = getTable1Stats("hgb",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "CD4" = getTable1Stats("cd4",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Cough" = getTable1Stats("Cough",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Night Sweats" = getTable1Stats("nightsweats",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+  # staging
+  "WHO stage" = getTable1Stats("WHOstage",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Staging: Symptomatic HIV-associated Nephropathy/Cardiomyopathy" = getTable1Stats("NephroCardiomyopathy",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+   # TB symptoms
+  "TB sign: none" = getTable1Stats("TBsignNone",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB sign: cough" = getTable1Stats("coughTB",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "TB sign: weight loss" = getTable1Stats("weightlossTB",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+
+  
+   # Diagnosis
+  "Diagnosis: recurrent severe bacterial pneumonia" = getTable1Stats("rsbPneumoniaDiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Recurrent Septicemia including non-typhoidal Salmonella" = getTable1Stats("salmonelladiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: HIV Wasting Syndrome" = getTable1Stats("wastingsyndiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Toxoplasmosis, CNS" = getTable1Stats("toxoplasdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "Diagnosis: Extrapulmonary TB" = getTable1Stats("tbextrapulmdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "Diagnosis: Pulmonary TB" = getTable1Stats("tbpulmdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Lymphoma (cerebral or B-cell non-Hodgkin)" = getTable1Stats("lymphomadiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Kaposi's Sarcoma" = getTable1Stats("KSdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "Diagnosis: Cervical Cancer" = getTable1Stats("cervicalcadiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  #"Diagnosis: Chronic Isosporiasis" = getTable1Stats("chronicisosporiasisdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  #"Diagnosis: Disseminated non-TB Mycobacterial Infection" = getTable1Stats("mycobacdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  #"Diagnosis: Disseminated Mycosis" = getTable1Stats("mycosisdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Extrapulmonary Cryptococcosis/Meningitis" = getTable1Stats("cryptococcdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Cryptosporidiosis" = getTable1Stats("cryptospordiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "Diagnosis: Cytomegalovirus Disease" = getTable1Stats("cytomegdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: HIV Encephalopathy" = getTable1Stats("encephaldiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Candidiasis (Oesophageal, Bronchi, Trachea, or Lungs)" = getTable1Stats("esocandiddiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Chronic Herpes Simplex" = getTable1Stats("herpessvdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "Diagnosis: Pneumocystis Pneumonia" = getTable1Stats("pcpdiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "Diagnosis: Progressive Multifocal Leukoencephalopathy" = getTable1Stats("pmldiag",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  
+  # TB Prophylaxis
+  "anti-TB med: Rifabutin" = getTable1Stats("rifabutin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Rifafour(RHZE)" = getTable1Stats("rifafour",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+  "anti-TB med: Rifampicin(R)" = getTable1Stats("rifampicin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "anti-TB med: Rifater(RHZ)" = getTable1Stats("rifater",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Rifinah(RH)" = getTable1Stats("rifinah",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Streptomycin" = getTable1Stats("streptomycin",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: 3-FDC(RHE)" = getTable1Stats("three_FDC",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Ethambutol(E)" = getTable1Stats("ethambutol",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "anti-TB med: Ethambutol(E)" = getTable1Stats("ethambutolinh",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "anti-TB med: INH" = getTable1Stats("inhtbtx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Other" = getTable1Stats("otherTbTx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),       
+   #"anti-TB med: Multi-Drug Resistant Tx" = getTable1Stats("mdrTbTx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "anti-TB med: Pyrazinamide(Z)" = getTable1Stats("pyrazinamide",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB Prophylaxis: INH" = getTable1Stats("inh",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+  
+  "OI Prophylaxis" = getTable1Stats("oiProph",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  "TB treatment" = getTable1Stats("tbtx",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),
+  
+ 
+  
+   # ARVS
+  "# current ARVs" = getTable1Stats("numARVs",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),  
+  "ARVs taken last 7 days" = getTable1Stats("PillsTakenLast7Days",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "ART adherence: percent taken since last visit" = getTable1Stats("art_adherence",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var),   
+  "ARV Adherence- combines formats from both the old and the new CTC 2" = getTable1Stats("art_adherence2",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var), 
+  "ARV adherence since last visit" = getTable1Stats("arvadherence",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var)
+  #"ART regimen" = getTable1Stats("regimen",outcome,desc_both,dataset.cx,statistics=stats,na.rm=na.rm.var)
+  
+ 
+ 
+          
+          )%>%
+   htmlTable( caption  = "<b> Clinical Profile Prior to ART Initiation | Viral Load Failure 3 </b>",useViewer=T,ctable = TRUE, align = 'lcccc',
+              n.cgroup = c(1,2,1 ), cgroup = c('', 'Third Virologic Failure', '') ,tfoot="<sup>&Dagger;</sup>"
+              )%>% htmlTable::addHtmlTableStyle(col.rgroup = c("#FFF", "#EEF")) 
+
+
+
+```
+
+
+
+
